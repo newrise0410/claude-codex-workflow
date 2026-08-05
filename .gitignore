@@ -1,0 +1,9 @@
+# plan-and-build 실행 산출물
+.pnb/
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

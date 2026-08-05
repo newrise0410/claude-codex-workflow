@@ -1,0 +1,23 @@
+{
+  "name": "claude-codex-workflow",
+  "owner": {
+    "name": "newrise0410"
+  },
+  "description": "Claude Fable(기획) + codex-luna-max(구현) 2-모델 워크플로우.",
+  "plugins": [
+    {
+      "name": "claude-codex",
+      "source": "./",
+      "description": "기획은 Claude Fable, 구현은 codex-luna-max(gpt-5.6-luna / max reasoning), 검수는 다시 Fable. PLAN.md를 계약으로 삼아 모델 간 핸드오프를 구조화한다.",
+      "version": "0.1.0",
+      "license": "MIT",
+      "keywords": [
+        "claude-code",
+        "codex",
+        "multi-model",
+        "planning",
+        "handoff"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "claude-codex",
+  "version": "0.1.0",
+  "description": "Claude Fable이 기획하고 codex-luna-max가 구현하는 2-모델 워크플로우. 기획 → 구현 → 검수 1회.",
+  "homepage": "https://github.com/newrise0410/claude-codex-workflow#readme",
+  "repository": "https://github.com/newrise0410/claude-codex-workflow",
+  "license": "MIT",
+  "author": {
+    "name": "newrise0410"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "agent-skills",
+    "multi-model",
+    "planning",
+    "workflow"
+  ]
+}
