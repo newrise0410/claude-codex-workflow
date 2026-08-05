@@ -38,9 +38,11 @@
 ## 설치
 
 ```
-/plugin marketplace add <이 저장소 경로 또는 GitHub owner/repo>
+/plugin marketplace add newrise0410/claude-codex-workflow
 /plugin install claude-codex@claude-codex-workflow
 ```
+
+업데이트는 `/plugin marketplace update claude-codex-workflow`.
 
 플러그인을 쓰지 않고 특정 프로젝트에만 넣으려면 `agents/`와 `skills/`를 그 프로젝트의 `.claude/` 아래로 복사하면 된다. 그 경우 스킬 이름에 `claude-codex:` 접두사가 붙지 않는다.
 
