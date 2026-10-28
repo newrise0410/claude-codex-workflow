@@ -66,13 +66,28 @@
 2. 계획서에 미해결 질문이 있으면 답한다.
 3. 검수 결과를 보고 머지할지, 고칠지, 버릴지 정한다.
 
+## 모델 고르기
+
+시작하면 이런 질문이 한 번 뜬다. 선택지는 그 시점에 실제로 쓸 수 있는 것에서 채워진다.
+
+| 항목 | 선택지 출처 | 기본값 |
+|---|---|---|
+| Claude 모델 (기획·검수) | Claude Code 서브에이전트가 받는 모델 (`fable`, `opus`, `sonnet` …) | `fable` |
+| Claude effort | 서브에이전트가 받는 effort (`low` ~ `max`) | 에이전트 평소 effort |
+| Codex 모델 (구현) | `list-models` 출력 (현재 codex 카탈로그) | `~/.codex/config.toml`의 `model` |
+| Codex effort | 고른 모델이 지원하는 effort | `config.toml`의 `model_reasoning_effort` |
+
+Codex 선택지에는 카탈로그의 모델 설명이 그대로 붙는다. 고민되면 이 원칙을 따른다. **무게는 기획에 싣고 구현은 가볍게.** 계획서가 촘촘하면 싼 구현 모델에 높은 effort로 충분하다. 아래 [비용 조절](#비용-조절)을 참고한다.
+
+기획과 검수를 다른 모델로 돌리고 싶으면 Other에 그렇게 적으면 된다.
+
 ## 산출물
 
 실행마다 `.pnb/runs/<NNN>-<슬러그>/`에 남는다.
 
 | 파일 | 내용 |
 |---|---|
-| `PLAN.md` | Fable이 쓴 사양서. 구현자가 읽는 유일한 계약 |
+| `PLAN.md` | Claude가 쓴 사양서. 구현자가 읽는 유일한 계약 |
 | `MODELS.txt` | 사용자가 고른 Claude·Codex 모델과 effort. 재검수·수정 라운드에서 그대로 쓴다 |
 | `BUILD_PROMPT.md` | codex에게 넘긴 지시문 |
 | `BUILD.log` | codex 전체 출력 |
@@ -80,7 +95,7 @@
 | `BUILD_MODEL.txt` | 실제로 쓴 모델과 effort. `--resume` 때 그대로 이어받는다 |
 | `DIFF.patch` | 구현 전후 diff. 신규 파일 포함, `.pnb` 제외 |
 | `CHANGED.txt` | 변경 파일 목록 |
-| `REVIEW.md` | Fable의 검수 결과와 판정 |
+| `REVIEW.md` | Claude의 검수 결과와 판정 |
 | `STATUS` | `running` / `done` / `failed:<code>` |
 | `BASE_HEAD.txt` | 구현 시작 시점의 커밋 SHA |
 | `BASE_UNTRACKED.txt` | 구현 시작 시점에 이미 있던 untracked 파일 + 내용 해시 |
@@ -174,6 +189,26 @@ bash scripts/watch-build.sh --run-dir .pnb/runs/001-add-login
 - 한두 줄 수정, 오타, 설정값 변경 — 오케스트레이션 비용이 작업보다 크다
 - 요구사항이 아직 흐릿할 때 — 계획서는 대화의 대체물이 아니다
 - 탐색적 디버깅 — 계획을 세울 수 있는 상태가 아니다
+
+## 예시
+
+[`examples/todo/`](examples/todo)는 이 워크플로우로 만든 첫 결과물이다. 의존성 없는 투두 웹앱이다. 기획 단계가 색상, 간격 스케일, DOM ID, 저장 스키마까지 사양으로 고정했고 검수는 `PASS_WITH_NITS`였다.
+
+## 변경 이력
+
+### 0.2.0 — 2026-10-28
+
+- **모델과 effort를 실행할 때 고른다.** Claude(기획·검수)와 Codex(구현) 모두 해당한다. 고른 값은 `MODELS.txt`에 남는다.
+- `scripts/list-models` 추가. 현재 codex 카탈로그를 몇 줄로 정리해 보여준다.
+- `codex-build`가 모델을 하드코딩하지 않는다. 생략하면 codex `config.toml` 기본값을 쓰고, 실제로 쓴 값은 `BUILD_MODEL.txt`에 남는다. `--resume`은 그 값을 이어받는다. `ultra` effort도 받는다.
+- 수정: 구현 단계가 stdin을 기다리며 멈추던 문제. `codex exec`는 stdin이 터미널이 아니면 입력이 끝날 때까지 기다린다.
+- 기존 기본값이던 `gpt-5.6-luna`는 이제 구세대 모델이다. 0.1.0과 같은 구성을 원하면 `gpt-5.6-luna` / `max`를 고르면 된다.
+
+업데이트는 `/plugin marketplace update claude-codex-workflow`.
+
+### 0.1.0 — 2026-08-05
+
+- 첫 공개. Fable 기획, codex-luna-max(`gpt-5.6-luna` / max) 구현, Fable 검수.
 
 ## 라이선스
 
