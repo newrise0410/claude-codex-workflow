@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  PLAN.md를 codex-luna-max에게 넘겨 구현시키고, 결과 diff를 검수용으로 캡처한다.
+  PLAN.md를 codex에게 넘겨 구현시키고, 결과 diff를 검수용으로 캡처한다.
 
 .DESCRIPTION
   claude-codex 워크플로우의 2단계(구현)를 실행한다.
@@ -9,12 +9,17 @@
     STATUS            running | done | failed:<exit code>
     BUILD.log         codex 전체 출력
     BUILD_SUMMARY.md  codex의 마지막 메시지 (구현 보고)
+    BUILD_MODEL.txt   실제로 쓴 모델과 effort
     DIFF.patch        구현 전후 diff (.pnb 제외)
     CHANGED.txt       변경된 파일 목록
     BASE_HEAD.txt     구현 시작 시점의 커밋 SHA
 
 .EXAMPLE
   pwsh scripts/codex-build.ps1 -RunDir .pnb/runs/001-add-login
+
+.EXAMPLE
+  # 모델 지정. 쓸 수 있는 모델은 scripts/list-models.ps1로 확인
+  pwsh scripts/codex-build.ps1 -RunDir .pnb/runs/001-add-login -Model gpt-6-luna -Effort max
 
 .EXAMPLE
   # 검수 지적사항을 같은 codex 세션에 이어서 반영
@@ -29,11 +34,11 @@ param(
   # codex가 작업할 저장소 루트. 기본값은 현재 디렉터리.
   [string]$RepoRoot = (Get-Location).Path,
 
-  # 구현 모델. codex-luna-max = gpt-5.6-luna + max reasoning.
-  [string]$Model = 'gpt-5.6-luna',
+  # 구현 모델. 비우면 codex config.toml의 model을 쓴다. 목록은 list-models.ps1
+  [string]$Model = '',
 
-  # 리즈닝 강도: low | medium | high | xhigh | max
-  [string]$Effort = 'max',
+  # 리즈닝 강도: low | medium | high | xhigh | max | ultra. 비우면 config.toml의 model_reasoning_effort
+  [string]$Effort = '',
 
   # 샌드박스: read-only | workspace-write | danger-full-access
   [string]$Sandbox = 'workspace-write',
@@ -41,7 +46,7 @@ param(
   # codex에게 줄 지시문 파일. 기본값은 <RunDir>/BUILD_PROMPT.md
   [string]$PromptFile,
 
-  # 직전 codex 세션을 이어서 실행 (검수 지적사항 반영용)
+  # 직전 codex 세션을 이어서 실행 (검수 지적사항 반영용). 모델·effort를 안 주면 BUILD_MODEL.txt 값을 쓴다
   [switch]$Resume
 )
 
@@ -87,6 +92,35 @@ $diffPath    = Join-Path $RunDir 'DIFF.patch'
 $changedPath = Join-Path $RunDir 'CHANGED.txt'
 $baseHeadPath = Join-Path $RunDir 'BASE_HEAD.txt'
 $baseUntrackedPath = Join-Path $RunDir 'BASE_UNTRACKED.txt'
+$modelPath   = Join-Path $RunDir 'BUILD_MODEL.txt'
+
+# ------------------------------------------------------------- 모델 결정
+# 모델은 박아두지 않는다. 지정이 없으면 이어받기는 직전 실행 값을, 새 실행은 codex 설정값을 쓴다.
+# 실제로 쓴 값은 BUILD_MODEL.txt에 남겨 보고와 이어받기에 쓴다.
+function Read-Kv([string]$Path, [string]$Key) {
+  if (-not (Test-Path -LiteralPath $Path)) { return '' }
+  foreach ($line in @(Get-Content -LiteralPath $Path -Encoding utf8)) {
+    if ($line -match "^$Key=(.*)$") { return $Matches[1].Trim() }
+  }
+  return ''
+}
+function Get-ConfigDefault([string]$Key) {
+  $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }
+  $configPath = Join-Path $codexHome 'config.toml'
+  if (-not (Test-Path -LiteralPath $configPath)) { return '' }
+  # 최상위 키만 본다. 첫 [섹션]이 나오면 멈춘다. 프로필은 무시한다.
+  foreach ($line in @(Get-Content -LiteralPath $configPath -Encoding utf8)) {
+    if ($line -match '^\s*\[') { break }
+    if ($line -match "^\s*$Key\s*=\s*`"([^`"]*)`"") { return $Matches[1] }
+  }
+  return ''
+}
+if ($Resume) {
+  if (-not $Model)  { $Model  = Read-Kv $modelPath 'model' }
+  if (-not $Effort) { $Effort = Read-Kv $modelPath 'effort' }
+}
+if (-not $Model)  { $Model  = Get-ConfigDefault 'model' }
+if (-not $Effort) { $Effort = Get-ConfigDefault 'model_reasoning_effort' }
 
 # ------------------------------------------------------------- 기준점 기록
 $isGitRepo = $false
@@ -120,21 +154,24 @@ Write-Utf8 $statusPath "running`n"
 # 프롬프트 본문은 파일로 넘긴다. 인자에 한글 장문을 실으면 셸 인코딩/길이 문제가 생긴다.
 $prompt = "Read the file at $PromptFile and follow it exactly. It is your complete task brief."
 
+# 값이 비어 있으면(설정에도 없으면) 플래그를 빼서 codex 자체 기본값에 맡긴다.
+$modelArgs = @()
+if ($Model)  { $modelArgs += @('-m', $Model) }
+if ($Effort) { $modelArgs += @('-c', "model_reasoning_effort=$Effort") }
+
 # `codex exec resume`는 -s/-C를 받지 않는다. 그쪽은 -c 설정과 프로세스 cwd로 대신한다.
 if ($Resume) {
   $codexArgs = @(
-    'exec', 'resume', '--last',
-    '-m', $Model,
-    '-c', "model_reasoning_effort=$Effort",
+    'exec', 'resume', '--last'
+  ) + $modelArgs + @(
     '-c', "sandbox_mode=$Sandbox",
     '-o', $summaryPath,
     $prompt
   )
 } else {
   $codexArgs = @(
-    'exec',
-    '-m', $Model,
-    '-c', "model_reasoning_effort=$Effort",
+    'exec'
+  ) + $modelArgs + @(
     '-s', $Sandbox,
     '-C', $RepoRoot,
     '-o', $summaryPath,
@@ -142,7 +179,11 @@ if ($Resume) {
   )
 }
 
-Write-Host "[codex-build] model=$Model effort=$Effort sandbox=$Sandbox"
+Write-Utf8 $modelPath "model=$Model`neffort=$Effort`n"
+
+$shownModel  = if ($Model)  { $Model }  else { '(codex 기본값)' }
+$shownEffort = if ($Effort) { $Effort } else { '(모델 기본값)' }
+Write-Host "[codex-build] model=$shownModel effort=$shownEffort sandbox=$Sandbox"
 Write-Host "[codex-build] repo=$RepoRoot"
 Write-Host "[codex-build] brief=$PromptFile"
 Write-Host ''
@@ -155,7 +196,8 @@ try {
   if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
     $global:PSNativeCommandUseErrorActionPreference = $false
   }
-  & codex @codexArgs 2>&1 | Tee-Object -FilePath $logPath
+  # stdin을 빈 입력으로 닫아둔다. codex exec는 stdin이 터미널이 아니면 EOF까지 추가 입력을 기다린다.
+  $null | & codex @codexArgs 2>&1 | Tee-Object -FilePath $logPath
   $exitCode = $LASTEXITCODE
 } finally {
   Pop-Location

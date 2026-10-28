@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# PLAN.md를 codex-luna-max에게 넘겨 구현시키고, 결과 diff를 검수용으로 캡처한다.
+# PLAN.md를 codex에게 넘겨 구현시키고, 결과 diff를 검수용으로 캡처한다.
 # codex-build.ps1의 POSIX 대응판. 사용법은 --help 참고.
 set -uo pipefail
 
 RUN_DIR=""
 REPO_ROOT="$(pwd)"
-MODEL="gpt-5.6-luna"
-EFFORT="max"
+MODEL=""
+EFFORT=""
 SANDBOX="workspace-write"
 PROMPT_FILE=""
 RESUME=0
@@ -17,13 +17,13 @@ usage() {
 
   --run-dir <DIR>     실행 산출물 디렉터리. PLAN.md / BUILD_PROMPT.md가 여기 있어야 한다. (필수)
   --repo-root <DIR>   codex가 작업할 저장소 루트 (기본: 현재 디렉터리)
-  --model <NAME>      구현 모델 (기본: gpt-5.6-luna)
-  --effort <LEVEL>    low|medium|high|xhigh|max (기본: max)
+  --model <NAME>      구현 모델 (기본: codex config.toml의 model). 목록은 list-models.sh
+  --effort <LEVEL>    low|medium|high|xhigh|max|ultra (기본: config.toml의 model_reasoning_effort)
   --sandbox <MODE>    read-only|workspace-write|danger-full-access (기본: workspace-write)
   --prompt-file <F>   지시문 파일 (기본: <RUN_DIR>/BUILD_PROMPT.md)
-  --resume            직전 codex 세션을 이어서 실행
+  --resume            직전 codex 세션을 이어서 실행. 모델·effort를 안 주면 BUILD_MODEL.txt 값을 그대로 쓴다
 
-남기는 산출물: STATUS, BUILD.log, BUILD_SUMMARY.md, DIFF.patch, CHANGED.txt, BASE_HEAD.txt
+남기는 산출물: STATUS, BUILD.log, BUILD_SUMMARY.md, BUILD_MODEL.txt, DIFF.patch, CHANGED.txt, BASE_HEAD.txt
 EOF
 }
 
@@ -65,6 +65,24 @@ DIFF_PATH="$RUN_DIR/DIFF.patch"
 CHANGED_PATH="$RUN_DIR/CHANGED.txt"
 BASE_HEAD_PATH="$RUN_DIR/BASE_HEAD.txt"
 BASE_UNTRACKED_PATH="$RUN_DIR/BASE_UNTRACKED.txt"
+MODEL_PATH="$RUN_DIR/BUILD_MODEL.txt"
+
+# 모델은 박아두지 않는다. 지정이 없으면 이어받기는 직전 실행 값을, 새 실행은 codex 설정값을 쓴다.
+# 실제로 쓴 값은 BUILD_MODEL.txt에 남겨 보고와 이어받기에 쓴다.
+read_kv() { sed -n "s/^$1=//p" "$2" 2>/dev/null | head -n 1; }
+config_default() {
+  awk -v key="$1" '
+    /^[[:space:]]*\[/ { exit }
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*"/, ""); sub(/".*$/, ""); print; exit
+    }' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null
+}
+if [[ $RESUME -eq 1 && -f "$MODEL_PATH" ]]; then
+  [[ -n "$MODEL" ]]  || MODEL="$(read_kv model "$MODEL_PATH")"
+  [[ -n "$EFFORT" ]] || EFFORT="$(read_kv effort "$MODEL_PATH")"
+fi
+[[ -n "$MODEL" ]]  || MODEL="$(config_default model)"
+[[ -n "$EFFORT" ]] || EFFORT="$(config_default model_reasoning_effort)"
 
 IS_GIT=0
 if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -93,29 +111,36 @@ echo "running" > "$STATUS_PATH"
 PROMPT="Read the file at $PROMPT_FILE and follow it exactly. It is your complete task brief."
 
 # `codex exec resume`는 -s/-C를 받지 않는다. 그쪽은 -c 설정과 cwd로 대신한다.
+# 값이 비어 있으면(설정에도 없으면) 플래그를 빼서 codex 자체 기본값에 맡긴다.
+MODEL_ARGS=()
+[[ -n "$MODEL" ]]  && MODEL_ARGS+=(-m "$MODEL")
+[[ -n "$EFFORT" ]] && MODEL_ARGS+=(-c "model_reasoning_effort=$EFFORT")
+
 if [[ $RESUME -eq 1 ]]; then
   ARGS=(exec resume --last
-        -m "$MODEL"
-        -c "model_reasoning_effort=$EFFORT"
+        ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}
         -c "sandbox_mode=$SANDBOX"
         -o "$SUMMARY_PATH"
         "$PROMPT")
 else
   ARGS=(exec
-        -m "$MODEL"
-        -c "model_reasoning_effort=$EFFORT"
+        ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}
         -s "$SANDBOX"
         -C "$REPO_ROOT"
         -o "$SUMMARY_PATH"
         "$PROMPT")
 fi
 
-echo "[codex-build] model=$MODEL effort=$EFFORT sandbox=$SANDBOX"
+printf 'model=%s\neffort=%s\n' "$MODEL" "$EFFORT" > "$MODEL_PATH"
+
+echo "[codex-build] model=${MODEL:-(codex 기본값)} effort=${EFFORT:-(모델 기본값)} sandbox=$SANDBOX"
 echo "[codex-build] repo=$REPO_ROOT"
 echo "[codex-build] brief=$PROMPT_FILE"
 echo
 
-( cd "$REPO_ROOT" && codex "${ARGS[@]}" 2>&1 ) | tee "$LOG_PATH"
+# stdin을 닫아둔다. codex exec는 stdin이 터미널이 아니면 EOF까지 추가 입력을 기다리므로
+# 백그라운드 실행에서 열린 파이프를 물려받으면 영원히 멈춘다.
+( cd "$REPO_ROOT" && codex "${ARGS[@]}" < /dev/null 2>&1 ) | tee "$LOG_PATH"
 EXIT_CODE="${PIPESTATUS[0]}"
 
 if [[ $IS_GIT -eq 1 ]]; then

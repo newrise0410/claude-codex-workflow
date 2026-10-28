@@ -1,22 +1,28 @@
 # claude-codex-workflow
 
-기획은 **Claude Fable**, 구현은 **codex-luna-max**, 검수는 다시 **Fable**에게 맡기는 Claude Code 워크플로우.
+기획은 **Claude**(기본 Fable), 구현은 **Codex**, 검수는 다시 **Claude**에게 맡기는 Claude Code 워크플로우.
 
-각 모델을 잘하는 자리에 놓는다. Fable은 요구를 읽고 저장소를 파악해 구조를 짜는 데 강하고, `gpt-5.6-luna`를 max 리즈닝으로 돌리면 확정된 사양을 코드로 옮기는 일을 싸게 처리한다. 두 모델 사이를 잇는 계약이 `PLAN.md`다.
+각 모델을 잘하는 자리에 놓는다. Claude는 요구를 읽고 저장소를 파악해 구조를 짜는 데 강하고, Codex는 확정된 사양을 코드로 옮기는 일을 싸게 처리한다. 두 모델 사이를 잇는 계약이 `PLAN.md`다.
+
+모델은 박아두지 않는다. 시작할 때 **Claude(기획·검수)와 Codex(구현)의 모델과 effort를 사용자가 고른다.** Claude 쪽 선택지는 Claude Code의 서브에이전트가 받는 모델·effort이고, Codex 쪽은 `codex debug models`로 읽은 지금의 카탈로그다. codex 라인업은 몇 달마다 바뀌기 때문이다. 기본값은 Claude가 `fable`, Codex가 사용자 codex 설정(`~/.codex/config.toml`)이다.
 
 ```
 사용자 요청
     │
     ▼
-[1] 기획 · Claude Fable ──────────► PLAN.md
+[0] 모델 선택 · 사용자 ─────────────► MODELS.txt
+    │  Claude 모델/effort, Codex 모델/effort
+    │
+    ▼
+[1] 기획 · Claude ────────────────► PLAN.md
     │  저장소 조사, 파일별 작업, 인터페이스 계약, 검증 명령
     │
     ▼
-[2] 구현 · codex-luna-max ────────► DIFF.patch + BUILD_SUMMARY.md
-    │  gpt-5.6-luna / max reasoning / workspace-write
+[2] 구현 · Codex ─────────────────► DIFF.patch + BUILD_SUMMARY.md
+    │  카탈로그에서 고른 모델 / effort / workspace-write
     │
     ▼
-[3] 검수 · Claude Fable ──────────► REVIEW.md
+[3] 검수 · Claude ────────────────► REVIEW.md
        계획 대비 이행 확인, 검증 명령 실행, PASS/FAIL 판정
 ```
 
@@ -32,7 +38,7 @@
 
 - [Claude Code](https://claude.com/claude-code)
 - [Codex CLI](https://developers.openai.com/codex/cli) — 설치 후 `codex login`
-- `gpt-5.6-luna` 모델 접근 권한 (`codex` 실행 후 `/model`에서 확인)
+- 모델 목록 정리에 `python3` (macOS/Linux). Windows는 PowerShell만 있으면 된다
 - git 저장소 (검수 단계가 diff를 읽는다)
 
 ## 설치
@@ -54,10 +60,11 @@
 
 또는 그냥 자연어로 — "이거 fable로 기획해서 codex한테 넘겨줘" 같은 말에도 스킬이 걸린다.
 
-진행 중 사용자가 개입하는 지점은 두 곳뿐이다.
+진행 중 사용자가 개입하는 지점은 세 곳뿐이다.
 
-1. 계획서에 미해결 질문이 있으면 답한다.
-2. 검수 결과를 보고 머지할지, 고칠지, 버릴지 정한다.
+1. 시작할 때 Claude·Codex 모델과 effort를 고른다(질문 하나에 네 항목). 요청에 이미 적은 항목은("기획은 opus, 구현은 gpt-6-luna max") 묻지 않는다.
+2. 계획서에 미해결 질문이 있으면 답한다.
+3. 검수 결과를 보고 머지할지, 고칠지, 버릴지 정한다.
 
 ## 산출물
 
@@ -66,9 +73,11 @@
 | 파일 | 내용 |
 |---|---|
 | `PLAN.md` | Fable이 쓴 사양서. 구현자가 읽는 유일한 계약 |
+| `MODELS.txt` | 사용자가 고른 Claude·Codex 모델과 effort. 재검수·수정 라운드에서 그대로 쓴다 |
 | `BUILD_PROMPT.md` | codex에게 넘긴 지시문 |
 | `BUILD.log` | codex 전체 출력 |
 | `BUILD_SUMMARY.md` | codex의 구현 보고 (마지막 메시지) |
+| `BUILD_MODEL.txt` | 실제로 쓴 모델과 effort. `--resume` 때 그대로 이어받는다 |
 | `DIFF.patch` | 구현 전후 diff. 신규 파일 포함, `.pnb` 제외 |
 | `CHANGED.txt` | 변경 파일 목록 |
 | `REVIEW.md` | Fable의 검수 결과와 판정 |
@@ -81,6 +90,23 @@
 `.pnb/`는 기본적으로 `.gitignore`에 들어간다. `PLAN.md`와 `REVIEW.md`를 이력으로 남기고 싶으면 빼도 된다.
 
 ## 스크립트 직접 실행
+
+지금 쓸 수 있는 모델부터 본다.
+
+```bash
+bash scripts/list-models.sh        # Windows: pwsh scripts/list-models.ps1
+```
+
+```
+기본값: model=gpt-6-astra effort=high  (/home/me/.codex/config.toml)
+
+  gpt-6.1-sol    low|medium|high|xhigh|max|ultra   Latest workhorse model for coding and everyday work.
+* gpt-6-astra    low|medium|high|xhigh|max|ultra   Frontier intelligence for the most demanding work.
+  gpt-6-luna     low|medium|high|xhigh|max         Fast and affordable model for easier tasks.
+  ...
+```
+
+`*`가 현재 기본 모델이다. 위 목록은 2026년 10월 기준 예시이고 실제 출력은 계정과 시점에 따라 다르다.
 
 구현 단계만 따로 돌릴 수 있다.
 
@@ -96,13 +122,13 @@ bash scripts/codex-build.sh --run-dir .pnb/runs/001-add-login
 |---|---|---|
 | `-RunDir` / `--run-dir` | (필수) | `PLAN.md`와 `BUILD_PROMPT.md`가 있는 디렉터리 |
 | `-RepoRoot` / `--repo-root` | 현재 디렉터리 | codex의 작업 루트 |
-| `-Model` / `--model` | `gpt-5.6-luna` | 구현 모델 |
-| `-Effort` / `--effort` | `max` | `low`\|`medium`\|`high`\|`xhigh`\|`max` |
+| `-Model` / `--model` | codex 설정의 `model` | 구현 모델. `list-models`에 나온 이름 |
+| `-Effort` / `--effort` | codex 설정의 `model_reasoning_effort` | `low`\|`medium`\|`high`\|`xhigh`\|`max`\|`ultra` (모델마다 지원 범위가 다르다) |
 | `-Sandbox` / `--sandbox` | `workspace-write` | `read-only`\|`workspace-write`\|`danger-full-access` |
 | `-PromptFile` / `--prompt-file` | `<RunDir>/BUILD_PROMPT.md` | codex에게 줄 지시문 |
 | `-Resume` / `--resume` | off | 직전 codex 세션을 이어서 실행 |
 
-`-Resume`는 검수 지적사항을 반영시킬 때 쓴다. 같은 세션을 이어받아 codex가 자기가 방금 쓴 코드의 맥락을 유지한다.
+`-Resume`는 검수 지적사항을 반영시킬 때 쓴다. 같은 세션을 이어받아 codex가 자기가 방금 쓴 코드의 맥락을 유지한다. 모델·effort를 따로 주지 않으면 `BUILD_MODEL.txt`에 남은 값을 그대로 쓴다.
 
 ## 진행 상황 보기
 
@@ -131,12 +157,17 @@ bash scripts/watch-build.sh --run-dir .pnb/runs/001-add-login
 
 ## 비용 조절
 
+계획서가 촘촘할수록 구현 모델은 가벼워도 된다. 그게 이 워크플로우의 전제다.
+
 | 상황 | 조정 |
 |---|---|
-| 작업이 단순함 | `-Effort high` 또는 `medium` |
-| 계획이 복잡하거나 luna가 헤맴 | `-Model gpt-5.6-sol` |
-| 기계적인 반복 작업 | `-Model gpt-5.4-mini -Effort medium` |
-| 기획·검수도 아껴야 함 | 서브에이전트 호출 모델을 `sonnet`으로 |
+| 작업이 단순함 | effort를 `medium`이나 `high`로 낮춘다 |
+| 계획이 상세하고 기계적인 작업 | 카탈로그에서 가볍다고 설명된 모델 (예: `gpt-6-luna`) + 높은 effort |
+| 계획이 복잡하거나 구현자가 헤맴 | 주력·최상위 모델 (예: `gpt-6.1-sol`, `gpt-6-astra`) |
+| 기획이 부실함 | Claude 모델이나 effort를 올린다. 가장 효과가 큰 조정이다 |
+| 기획·검수도 아껴야 함 | Claude 모델을 가벼운 것(예: `sonnet`)으로 바꾸거나 effort를 낮춘다 |
+
+예시 모델명은 2026년 10월 기준이다. 실제로 고를 때는 `list-models` 출력을 믿어라.
 
 ## 이 워크플로우를 쓰지 말아야 할 때
 

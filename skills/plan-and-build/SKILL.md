@@ -1,8 +1,8 @@
 ---
 name: plan-and-build
-description: 기획은 Claude Fable, 구현은 codex-luna-max(gpt-5.6-luna + max reasoning), 검수는 다시 Fable에게 맡기는 2-모델 워크플로우. 사용자가 "/plan-and-build", "기획하고 구현해줘", "fable로 기획해서 codex로 짜줘", "plan and build", "코덱스한테 넘겨줘"라고 하거나 기능 개발을 모델 분업으로 돌리고 싶어할 때 사용한다.
+description: 기획은 Claude, 구현은 Codex, 검수는 다시 Claude에게 맡기는 2-모델 워크플로우. 양쪽 모델과 effort는 실행할 때 사용자가 고른다(Codex는 현재 카탈로그에서). 사용자가 "/plan-and-build", "기획하고 구현해줘", "fable로 기획해서 codex로 짜줘", "plan and build", "코덱스한테 넘겨줘"라고 하거나 기능 개발을 모델 분업으로 돌리고 싶어할 때 사용한다.
 metadata:
-  short-description: Fable 기획 → codex-luna-max 구현 → Fable 검수
+  short-description: Claude 기획 → Codex 구현 → Claude 검수 (모델·effort 선택)
 ---
 
 # plan-and-build
@@ -11,9 +11,10 @@ metadata:
 
 | 단계 | 담당 | 실행 방식 | 산출물 |
 |---|---|---|---|
-| 1. 기획 | Claude Fable | `fable-planner` 서브에이전트 | `PLAN.md` |
-| 2. 구현 | codex-luna-max | `codex-build` 스크립트 | `BUILD_SUMMARY.md`, `DIFF.patch` |
-| 3. 검수 | Claude Fable | `fable-reviewer` 서브에이전트 | `REVIEW.md` |
+| 0. 모델 선택 | 사용자 | AskUserQuestion | `MODELS.txt` |
+| 1. 기획 | Claude (기본 Fable) | `fable-planner` 서브에이전트 | `PLAN.md` |
+| 2. 구현 | Codex (사용자가 고른 모델) | `codex-build` 스크립트 | `BUILD_SUMMARY.md`, `DIFF.patch` |
+| 3. 검수 | Claude (기본 Fable) | `fable-reviewer` 서브에이전트 | `REVIEW.md` |
 
 검수는 **1회**다. 자동 재작업 루프는 돌리지 않는다. FAIL이 나오면 사람에게 보고하고, 수정 반영은 사용자가 요청할 때만 한다(아래 "지적사항 반영" 참고).
 
@@ -47,9 +48,50 @@ codex --version
 
 `.pnb/`가 `.gitignore`에 없고 저장소가 git이면, 산출물을 커밋할지 사용자에게 한 번 묻고 원치 않으면 `.gitignore`에 `.pnb/`를 추가해라. 묻지 않고 임의로 `.gitignore`를 고치지 마라.
 
-### 1. 기획 — Fable
+#### 0-1. 모델과 effort 고르기
 
-`fable-planner` 서브에이전트를 띄운다. 플러그인으로 설치했으면 `claude-codex:fable-planner`, 저장소에 직접 복사했으면 `fable-planner`다. Agent 호출 시 `model: "fable"`을 명시해라(에이전트 정의에도 있지만 이중으로 보장한다).
+기획·검수(Claude)와 구현(Codex) 모두 **모델과 effort를 사용자가 고른다.** 결과 품질과 비용을 가장 크게 가르는 선택이라 기본값을 몰래 쓰지 마라. 기획에 들어가기 전에 한 번만 묻는다.
+
+선택지는 기억으로 지어내지 말고 지금 쓸 수 있는 것에서 가져온다.
+
+- **Claude**: 네 Agent 도구의 `model` 파라미터가 받는 값과 `effort` 파라미터가 받는 값이 선택지다. 기본 모델은 에이전트 정의의 `model: fable`이고, 기본 effort는 파라미터를 생략했을 때(에이전트의 평소 effort)다.
+- **Codex**: 카탈로그를 읽는다. 라인업이 수시로 바뀌므로 매번 돌려라.
+
+  ```bash
+  bash "${CLAUDE_PLUGIN_ROOT}/scripts/list-models.sh"
+  ```
+
+  Windows는 `pwsh -NoProfile -File "${CLAUDE_PLUGIN_ROOT}/scripts/list-models.ps1"`. 첫 줄은 사용자 codex 설정(`config.toml`)의 기본 모델·effort이고, 이어서 `모델  지원 effort  설명`이 한 줄씩 나온다. `*`가 현재 기본 모델이다.
+
+AskUserQuestion **한 번에 네 질문**으로 묻는다.
+
+| 질문 | 첫 선택지 (라벨에 `(기본값)`) | 나머지 선택지 |
+|---|---|---|
+| Claude 모델 (기획·검수) | `fable` | Agent 도구가 받는 다른 모델들 |
+| Claude effort | 생략 = 에이전트 평소 effort | Agent 도구의 `effort` 값 중 2~3개 |
+| Codex 모델 (구현) | `*` 표시 모델 | 목록 위쪽 순서대로, 최대 4개 |
+| Codex effort | config의 기본 effort | 목록의 모든 모델이 지원하는 값 중 2~3개 |
+
+- Codex 선택지의 description에는 카탈로그 설명을 그대로 옮긴다. 이름만 보고 성격을 지어내지 마라.
+- 판단을 도울 한 줄은 붙여도 된다. 이 워크플로우의 전제는 **계획이 촘촘하면 구현 모델은 가벼워도 된다**는 것이다. 무게는 기획 쪽에 두는 편이 맞다. 다만 고르는 건 사용자다.
+- 사용자가 요청에서 이미 정한 항목은 묻지 않는다("기획은 opus, 구현은 gpt-6-luna max"). 넷 다 정했으면 질문 자체를 건너뛴다.
+- 고른 Codex 모델이 지원하지 않는 effort가 들어왔거나 목록에 없는 모델명이면 알리고 그 항목만 다시 묻는다.
+- 기획과 검수를 다른 모델로 하고 싶다는 답(Other)이 오면 따로 기록해 각 단계에 쓴다.
+
+고른 값을 `<RUN_DIR>/MODELS.txt`에 남긴다. 재검수나 수정 반영 라운드에서 같은 값을 쓰기 위해서다. Codex 쪽은 스크립트가 실제로 쓴 값을 `BUILD_MODEL.txt`에 따로 남긴다.
+
+```
+claude_model=fable
+claude_effort=
+codex_model=gpt-6-luna
+codex_effort=max
+```
+
+빈 값은 기본값이라는 뜻이다. Agent 호출에서 `effort`를 생략하고, 스크립트에서 플래그를 생략한다.
+
+### 1. 기획 — Claude
+
+`fable-planner` 서브에이전트를 띄운다. 플러그인으로 설치했으면 `claude-codex:fable-planner`, 저장소에 직접 복사했으면 `fable-planner`다. Agent 호출 시 0-1에서 고른 `model`을 명시하고, effort를 골랐으면 `effort`도 넘긴다. 사용자가 직접 고른 값이므로 넘겨도 된다. 기본값을 골랐으면 `effort`는 생략한다.
 
 프롬프트에 반드시 넣을 것:
 
@@ -63,27 +105,29 @@ codex --version
 - `0` → 2단계로 진행. 진행 전에 사용자에게 계획 요약(제목, 건드릴 파일 수, 2~3문장 요약)과 `PLAN.md` 경로를 한 번 보여준다.
 - `1` 이상 → **멈춘다.** `PLAN.md`의 `## 8. 확인 필요`를 읽고 AskUserQuestion으로 물어라. 답을 받으면 그 답을 프롬프트에 얹어 `fable-planner`를 다시 호출해 계획을 갱신시킨다(같은 경로에 덮어쓰기). 구현자에게 미해결 질문이 담긴 계획을 넘기지 마라.
 
-### 2. 구현 — codex-luna-max
+### 2. 구현 — Codex
 
-먼저 `<RUN_DIR>/BUILD_PROMPT.md`를 만든다. 템플릿은 `references/build-prompt.md`에 있다. `<PLAN_PATH>` 자리에 `PLAN.md`의 절대 경로를 넣고, 그 외에는 문구를 바꾸지 마라.
+#### 2-1. 실행
+
+0-1에서 고른 Codex 모델·effort를 쓴다. 먼저 `<RUN_DIR>/BUILD_PROMPT.md`를 만든다. 템플릿은 `references/build-prompt.md`에 있다. `<PLAN_PATH>` 자리에 `PLAN.md`의 절대 경로를 넣고, 그 외에는 문구를 바꾸지 마라.
 
 그다음 스크립트를 **백그라운드로** 실행한다. 구현은 10분을 넘길 수 있어서 포그라운드 타임아웃에 걸린다. 백그라운드로 돌리면 종료 시 알림이 온다.
 
 Windows — PowerShell 도구, `run_in_background: true`:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/codex-build.ps1" -RunDir "<RUN_DIR>" -RepoRoot "<REPO_ROOT>"
+pwsh -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/codex-build.ps1" -RunDir "<RUN_DIR>" -RepoRoot "<REPO_ROOT>" -Model "<MODEL>" -Effort "<EFFORT>"
 ```
 
 macOS / Linux — Bash 도구, `run_in_background: true`:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/codex-build.sh" --run-dir "<RUN_DIR>" --repo-root "<REPO_ROOT>"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/codex-build.sh" --run-dir "<RUN_DIR>" --repo-root "<REPO_ROOT>" --model "<MODEL>" --effort "<EFFORT>"
 ```
 
 플러그인이 아니라 저장소에 직접 둔 경우 `${CLAUDE_PLUGIN_ROOT}` 대신 실제 경로를 쓴다.
 
-#### 2-1. 진행 감시기를 반드시 같이 띄운다
+#### 2-2. 진행 감시기를 반드시 같이 띄운다
 
 백그라운드 실행은 끝날 때 알림 하나만 준다. 그것만으로는 구현이 몇 분째 뭘 하고 있는지, 중간에 뻗었는지 알 수 없다. 빌드를 백그라운드로 던진 **직후** Monitor 도구로 감시기를 걸어라. 이건 선택이 아니다.
 
@@ -104,18 +148,18 @@ Monitor 호출 시 `description`은 `"codex 구현 진행 (<슬러그>)"`, `time
 
 기본값은 `--stall-secs 180 --min-interval 45`다. 짧은 작업이면 `--stall-secs 90`으로 줄여라.
 
-실행을 걸어놓고 사용자에게 "구현 시작 — 모델 gpt-5.6-luna / max, 진행 상황은 감시기가 알려준다"라고 알린 뒤 기다린다. **완료 알림이 오기 전에 결과를 추측해서 보고하지 마라.** 감시기의 `[진행]` 이벤트는 결과가 아니라 살아있다는 신호일 뿐이다.
+실행을 걸어놓고 사용자에게 "구현 시작 — 모델 <MODEL> / <EFFORT>, 진행 상황은 감시기가 알려준다"라고 알린 뒤 기다린다. **완료 알림이 오기 전에 결과를 추측해서 보고하지 마라.** 감시기의 `[진행]` 이벤트는 결과가 아니라 살아있다는 신호일 뿐이다.
 
 기본값은 `-Sandbox workspace-write`다. 계획이 저장소 밖 경로를 건드려야 하거나 네트워크 설치가 필요하면 사용자에게 확인받고 `-Sandbox danger-full-access`로 올려라.
 
 완료되면 `<RUN_DIR>/STATUS`를 확인한다.
 
 - `done` → 3단계로.
-- `failed:<code>` → `BUILD.log` 끝부분을 읽고 원인을 진단해 사용자에게 보고한다. 흔한 원인: 로그인 만료(`codex login`), 모델 접근 권한 없음, 샌드박스 거부. 검수 단계는 건너뛴다.
+- `failed:<code>` → `BUILD.log` 끝부분을 읽고 원인을 진단해 사용자에게 보고한다. 흔한 원인: 로그인 만료(`codex login`), 모델 접근 권한 없음 또는 사라진 모델명(`list-models`로 다시 확인), 고른 모델이 지원하지 않는 effort, 샌드박스 거부. 검수 단계는 건너뛴다.
 
-### 3. 검수 — Fable
+### 3. 검수 — Claude
 
-`fable-reviewer` 서브에이전트를 띄운다(`model: "fable"` 명시).
+`fable-reviewer` 서브에이전트를 띄운다. 모델·effort는 1단계와 같은 방식으로 `MODELS.txt`의 값을 쓴다.
 
 프롬프트에 넣을 것 — 전부 **절대 경로**로:
 
@@ -130,6 +174,7 @@ Monitor 호출 시 `description`은 `"codex 구현 진행 (<슬러그>)"`, `time
 사용자에게 이렇게 알린다:
 
 - **판정** — PASS / PASS_WITH_NITS / FAIL과 한 문장 근거
+- **모델** — 기획·검수는 `MODELS.txt`의 Claude 모델·effort, 구현은 `BUILD_MODEL.txt`의 모델·effort
 - **변경 규모** — 파일 수, 추가/삭제 줄 수
 - **검증 결과** — 통과/전체, 실패한 명령이 있으면 그것
 - **BLOCKER·MAJOR 지적사항** — 있으면 요약. MINOR는 개수만.
@@ -142,18 +187,20 @@ Monitor 호출 시 `description`은 `"codex 구현 진행 (<슬러그>)"`, `time
 검수가 FAIL이나 MAJOR를 냈고 사용자가 수정을 원하면:
 
 1. `<RUN_DIR>/FIX_PROMPT.md`를 만든다. `REVIEW.md`의 BLOCKER·MAJOR 항목을 그대로 옮기고, "이 항목들만 고쳐라. 그 외 리팩터링 금지. 다 고친 뒤 PLAN.md `## 5. 검증`을 다시 돌려라." 를 덧붙인다.
-2. `-Resume` (bash는 `--resume`) 과 `-PromptFile <RUN_DIR>/FIX_PROMPT.md`로 스크립트를 다시 돌린다. 같은 codex 세션을 이어받아 맥락을 유지한다.
+2. `-Resume` (bash는 `--resume`) 과 `-PromptFile <RUN_DIR>/FIX_PROMPT.md`로 스크립트를 다시 돌린다. 같은 codex 세션을 이어받아 맥락을 유지한다. 모델·effort를 안 넘기면 `BUILD_MODEL.txt`의 값을 그대로 쓴다. 사용자가 이번엔 다른 모델을 원할 때만 넘겨라.
 3. 재검수가 필요하면 3단계를 다시 실행한다. **자동으로 반복하지 마라** — 매 라운드 사용자 요청이 있어야 한다.
 
 ## 모델 바꾸기
 
-| 목적 | 플래그 |
-|---|---|
-| 더 싸게/빠르게 | `-Effort high` 또는 `-Effort medium` |
-| 더 강한 구현 모델 | `-Model gpt-5.6-sol` |
-| 가벼운 작업 | `-Model gpt-5.4-mini -Effort medium` |
+모델은 0-1에서 사용자가 고른다. 아래는 결과가 마음에 안 들 때 다음 라운드에서 바꾸는 방향이다. Codex 모델명은 `list-models`가 보여주는 것만 믿어라. 이 문서에 예시로 적힌 모델명도 언젠가 낡는다.
 
-기획·검수 모델은 서브에이전트 호출의 `model` 파라미터로 바꾼다(`fable` → `opus` / `sonnet`).
+| 상황 | 조정 |
+|---|---|
+| 더 싸게/빠르게 | `-Effort` 낮추기(`high` → `medium`), 또는 카탈로그에서 가볍다고 설명된 모델 |
+| 구현자가 헤맨다 | 카탈로그 위쪽의 주력·최상위 모델로 바꾸거나 effort를 올린다 |
+| 아무것도 안 넘김 | 사용자 codex `config.toml`의 `model` / `model_reasoning_effort` |
+| 기획이 부실하다 | Claude 모델이나 effort를 올린다. 이 워크플로우에서 가장 효과가 큰 조정이다 |
+| 기획·검수도 아껴야 한다 | Claude 모델을 한 단계 가벼운 것으로, 또는 effort를 낮춘다 |
 
 ## 실패 모드 체크리스트
 
